@@ -16,6 +16,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.Button
+import androidx.compose.material.MaterialTheme
 import androidx.compose.material.Text
 import androidx.compose.material.TopAppBar
 import androidx.compose.runtime.Composable
@@ -54,10 +55,15 @@ class MainActivity : ComponentActivity() {
                 )
                 MainView(
                     onSend = {
-                        val intent = Intent(this@MainActivity,PickDeviceActivity::class.java)
-                        startActivity(intent)
+                        startActivity(Intent(this@MainActivity,PickDeviceActivity::class.java).apply {
+                            putExtra("type","send")
+                        })
                     },
-                    onReceive = {}
+                    onReceive = {
+                        startActivity(Intent(this@MainActivity,PickDeviceActivity::class.java).apply {
+                            putExtra("type","receive")
+                        })
+                    }
                 )
             }
         }
@@ -99,7 +105,7 @@ fun MainView(onSend: () -> Unit, onReceive: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(text = "Welcome to the file transfer!", fontSize = 30.sp)
+            Text(text = "Welcome to the file transfer!", fontSize = 30.sp,color = MaterialTheme.colors.onBackground)
             Spacer(modifier = Modifier.height(100.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.width(IntrinsicSize.Max)) {

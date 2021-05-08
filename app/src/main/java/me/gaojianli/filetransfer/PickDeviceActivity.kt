@@ -1,16 +1,12 @@
 package me.gaojianli.filetransfer
 
 import android.Manifest
+import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.wifi.WpsInfo
-import android.net.wifi.p2p.WifiP2pConfig
-import android.net.wifi.p2p.WifiP2pDevice
-import android.net.wifi.p2p.WifiP2pInfo
-import android.net.wifi.p2p.WifiP2pManager
-import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
@@ -24,18 +20,14 @@ import androidx.compose.material.Text
 import androidx.compose.material.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.tooling.preview.PreviewParameter
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
-import androidx.lifecycle.LiveData
-import androidx.compose.runtime.setValue
-import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -45,8 +37,23 @@ import me.gaojianli.filetransfer.ui.theme.Blue500
 import me.gaojianli.filetransfer.ui.theme.FileTransferTheme
 import me.gaojianli.filetransfer.ui.theme.LoadingDialog
 import me.gaojianli.filetransfer.wifi.WiFiDirectBroadcastReceiver
-import java.lang.StringBuilder
-import java.util.ArrayList
+import java.util.*
+
+import android.content.Intent
+import android.database.Cursor
+import android.net.Uri
+import android.net.wifi.p2p.*
+import androidx.activity.result.contract.ActivityResultContract
+import well_of_file.Well_of_file
+import android.provider.MediaStore
+import me.gaojianli.filetransfer.utils.UriUtils
+import androidx.core.content.ContextCompat
+import java.io.File
+import java.io.FileOutputStream
+
+
+val TYPE_SEND = "send"
+val TYPE_RECEIVE = "receive"
 
 class PickDeviceActivity : ComponentActivity() {
     private val intentFilter = IntentFilter()
@@ -54,13 +61,23 @@ class PickDeviceActivity : ComponentActivity() {
     private lateinit var manager: WifiP2pManager
     private var wifiP2pInfo: WifiP2pInfo? = null
     private lateinit var broadcastReceiver: BroadcastReceiver
-
+    private var isSending: Boolean = false
+    private var fileUri:Uri? = null
+    private val activityLauncher = registerForActivityResult(ResultContract()) {
+        it?.let {
+            fileUri = it
+            Toast.makeText(this, it.path, Toast.LENGTH_LONG).show()
+            createGroup()
+        }
+    }
+    private var connectionInfoAvailable = false
     private lateinit var mWifiP2pDevice: WifiP2pDevice
     private var wifiP2pEnabled = false
     private lateinit var peerList: ArrayList<WifiP2pDevice>
     private val viewModel = PickDeviceViewModel()
     private val TAG = "PickDeviceActivity"
-    private val dialog = LoadingDialog(this)
+    private var Type: String? = null
+    private lateinit var dialog: LoadingDialog
     private val directActionListener: DirectActionListener = object : DirectActionListener {
         override fun wifiP2pEnabled(enabled: Boolean) {
             wifiP2pEnabled = enabled
@@ -69,22 +86,49 @@ class PickDeviceActivity : ComponentActivity() {
         override fun onConnectionInfoAvailable(wifiP2pInfo: WifiP2pInfo) {
             peerList.clear()
             val stringBuilder = StringBuilder()
-            stringBuilder.append("连接的设备名：")
-            stringBuilder.append(mWifiP2pDevice.deviceName)
-            stringBuilder.append("\n")
-            stringBuilder.append("连接的设备的地址：")
-            stringBuilder.append(mWifiP2pDevice.deviceAddress)
-            stringBuilder.append("\n")
-            stringBuilder.append("是否群主：")
-            stringBuilder.append(if (wifiP2pInfo.isGroupOwner) "是群主" else "非群主")
-            stringBuilder.append("\n")
-            stringBuilder.append("群主IP地址：")
-            stringBuilder.append(wifiP2pInfo.groupOwnerAddress.hostAddress)
-            Log.d(TAG,stringBuilder.toString()
-            )
-            if (wifiP2pInfo.groupFormed && !wifiP2pInfo.isGroupOwner) {
-                this@PickDeviceActivity.wifiP2pInfo = wifiP2pInfo
+            if (Type == TYPE_SEND) {
+                stringBuilder.append("onConnectionInfoAvailable")
+                stringBuilder.append("isGroupOwner：" + wifiP2pInfo.isGroupOwner)
+                stringBuilder.append("groupFormed：" + wifiP2pInfo.groupFormed)
+                if (wifiP2pInfo.groupFormed && wifiP2pInfo.isGroupOwner) {
+                    connectionInfoAvailable = true
+                    Toast.makeText(this@PickDeviceActivity, stringBuilder.toString(), Toast.LENGTH_LONG)
+                        .show()
+                    if(!isSending){
+                        isSending = true
+                        dialog.setText("Serving")
+                        val path = UriUtils.getPathFromUri(this@PickDeviceActivity,fileUri)
+                        viewModel.serverFile(path) {
+                            dialog.dismiss()
+                            isSending = false
+                        }
+                    }
+                }
+            } else {
+
+                stringBuilder.append("连接的设备名：")
+                stringBuilder.append(mWifiP2pDevice.deviceName)
+                stringBuilder.append("\n")
+                stringBuilder.append("连接的设备的地址：")
+                stringBuilder.append(mWifiP2pDevice.deviceAddress)
+                stringBuilder.append("\n")
+                stringBuilder.append("是否群主：")
+                stringBuilder.append(if (wifiP2pInfo.isGroupOwner) "是群主" else "非群主")
+                stringBuilder.append("\n")
+                stringBuilder.append("群主IP地址：")
+                stringBuilder.append(wifiP2pInfo.groupOwnerAddress.hostAddress)
+                Log.d(TAG, stringBuilder.toString())
+                Toast.makeText(this@PickDeviceActivity, stringBuilder.toString(), Toast.LENGTH_LONG)
+                    .show()
+                if (wifiP2pInfo.groupFormed && !wifiP2pInfo.isGroupOwner) {
+                    this@PickDeviceActivity.wifiP2pInfo = wifiP2pInfo
+                    dialog.show(hintText = "Start Receving", cancelable = true, canceledOnTouchOutside = false)
+                    Well_of_file.receive(wifiP2pInfo.groupOwnerAddress.hostAddress,11451,"/data/local/tmp")
+                    dialog.dismiss()
+                }
             }
+
+
         }
 
         override fun onDisconnection() {
@@ -99,7 +143,8 @@ class PickDeviceActivity : ComponentActivity() {
         override fun onPeersAvailable(wifiP2pDeviceList: Collection<WifiP2pDevice>) {
             this@PickDeviceActivity.peerList.addAll(wifiP2pDeviceList)
             this@PickDeviceActivity.viewModel.setPeerList(wifiP2pDeviceList)
-            dialog.cancel()
+            if (Type == TYPE_RECEIVE)
+                dialog.cancel()
         }
 
         override fun onChannelDisconnected() {
@@ -127,13 +172,14 @@ class PickDeviceActivity : ComponentActivity() {
 
             override fun onFailure(reason: Int) {
                 Toast.makeText(this@PickDeviceActivity, "Search failed!", Toast.LENGTH_SHORT).show()
-
             }
         })
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Type = intent.getStringExtra("type")
+        dialog = LoadingDialog(this)
         // Indicates a change in the Wi-Fi P2P status.
         intentFilter.addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION)
 
@@ -164,14 +210,53 @@ class PickDeviceActivity : ComponentActivity() {
                 })
             }
         }
-        dialog.show(hintText = "Searching",cancelable = true,canceledOnTouchOutside = false)
         //搜寻附近带有 Wi-Fi P2P 的设备
-        viewModel.discovery { discovery() }
+        if (Type == TYPE_RECEIVE) {
+            val PERMISSIONS_STORAGE = arrayOf(
+                Manifest.permission.READ_EXTERNAL_STORAGE,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            )
+
+            if (PackageManager.PERMISSION_GRANTED !=
+                ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.WRITE_CONTACTS
+                )
+            ) {
+                ActivityCompat.requestPermissions(
+                    this,
+                    PERMISSIONS_STORAGE,
+                    1
+                )
+            }
+            dialog.show(hintText = "Searching", cancelable = true, canceledOnTouchOutside = false)
+            viewModel.discovery { discovery() }
+        } else {
+            val PERMISSIONS_STORAGE = arrayOf(
+                Manifest.permission.READ_EXTERNAL_STORAGE,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            )
+
+            if (PackageManager.PERMISSION_GRANTED !=
+                ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.WRITE_CONTACTS
+                )
+            ) {
+                ActivityCompat.requestPermissions(
+                    this,
+                    PERMISSIONS_STORAGE,
+                    1
+                )
+            }
+            dialog.show(hintText = "Waiting for connection", cancelable = true, canceledOnTouchOutside = false)
+            activityLauncher.launch(false)
+        }
     }
 
     private fun connect() {
         val config = WifiP2pConfig()
-        if (config.deviceAddress != null && mWifiP2pDevice != null) {
+        if (config.deviceAddress != null) {
             config.deviceAddress = mWifiP2pDevice.deviceAddress
             config.wps.setup = WpsInfo.PBC
             if (ActivityCompat.checkSelfPermission(
@@ -187,7 +272,7 @@ class PickDeviceActivity : ComponentActivity() {
             }
             manager.connect(channel, config, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() {
-                    Log.e(TAG, "connect onSuccess")
+                    Log.d(TAG, "connect onSuccess")
                 }
 
                 override fun onFailure(reason: Int) {
@@ -200,7 +285,8 @@ class PickDeviceActivity : ComponentActivity() {
 
     public override fun onResume() {
         super.onResume()
-        broadcastReceiver = WiFiDirectBroadcastReceiver(manager, channel, this,directActionListener)
+        broadcastReceiver =
+            WiFiDirectBroadcastReceiver(manager, channel, this, directActionListener)
         applicationContext.registerReceiver(broadcastReceiver, intentFilter)
     }
 
@@ -209,18 +295,80 @@ class PickDeviceActivity : ComponentActivity() {
         applicationContext.unregisterReceiver(broadcastReceiver)
     }
 
+    class ResultContract : ActivityResultContract<Boolean, Uri?>() {
+        override fun createIntent(context: Context, input: Boolean?): Intent {
+            return Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+            }
+        }
 
+        override fun parseResult(resultCode: Int, intent: Intent?): Uri? {
+            if (resultCode == Activity.RESULT_OK) {//是否选择，没选择就不会继续
+                return intent?.data;//得到uri，后面就是将uri转化成file的过程。
+            }
+            return null
+        }
+    }
+
+    private fun createGroup() {
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
+                1
+            )
+            return
+        }
+        removeGroup()
+        manager.createGroup(channel, object : WifiP2pManager.ActionListener {
+            override fun onSuccess() {
+                Toast.makeText(this@PickDeviceActivity, "Create group succeed", Toast.LENGTH_LONG).show()
+                dialog.show("Waiting for connection",true,false)
+            }
+
+            override fun onFailure(reason: Int) {
+                Toast.makeText(this@PickDeviceActivity, "Create group failed", Toast.LENGTH_LONG).show()
+                dialog.dismiss()
+                finish()
+            }
+        })
+    }
+
+    private fun removeGroup() {
+        manager.removeGroup(channel, object : WifiP2pManager.ActionListener {
+            override fun onSuccess() {
+                Toast.makeText(this@PickDeviceActivity, "onSuccess", Toast.LENGTH_LONG).show()
+            }
+
+            override fun onFailure(reason: Int) {
+                Toast.makeText(this@PickDeviceActivity, "onFailure", Toast.LENGTH_LONG).show()
+            }
+        })
+    }
 }
 
 class PickDeviceViewModel : ViewModel() {
-    var peerList:List<WifiP2pDevice> by mutableStateOf(listOf())
+    var peerList: List<WifiP2pDevice> by mutableStateOf(listOf())
     fun discovery(discoveryFun: () -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             discoveryFun()
         }
     }
-    fun setPeerList(list: Collection<WifiP2pDevice>){
+
+    fun setPeerList(list: Collection<WifiP2pDevice>) {
         peerList = list.toList()
+    }
+
+    fun serverFile(path:String,callback:()->Unit){
+        viewModelScope.launch(Dispatchers.IO) {
+            Well_of_file.send(path,11451)
+            callback()
+        }
     }
 }
 

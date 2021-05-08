@@ -5,6 +5,7 @@
     android:background="@drawable/dialog_loading_bg"
     android:gravity="center_vertical"
     android:orientation="horizontal"
+    android:forceDarkAllowed="true"
     android:padding="10dp">
 
     <ImageView
@@ -19,7 +20,7 @@
         android:id="@+id/tv_hint"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:textColor="@android:color/white"
+        android:textColor="@android:color/black"
         android:textSize="16sp" />
 
 </LinearLayout>

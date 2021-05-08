@@ -21,6 +21,10 @@ class LoadingDialog(context: Context?) : Dialog(context!!, R.style.LoadingDialog
         show()
     }
 
+    fun setText(hintText: String?){
+        tv_hint.text = hintText
+    }
+
     fun show(@StringRes hintTextRes: Int, cancelable: Boolean, canceledOnTouchOutside: Boolean) {
         setCancelable(cancelable)
         setCanceledOnTouchOutside(canceledOnTouchOutside)
