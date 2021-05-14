@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
+import java.nio.file.Path
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.wifi.WpsInfo
@@ -19,19 +20,12 @@ import androidx.compose.material.Card
 import androidx.compose.material.Text
 import androidx.compose.material.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import me.gaojianli.filetransfer.callback.DirectActionListener
 import me.gaojianli.filetransfer.ui.theme.Blue500
 import me.gaojianli.filetransfer.ui.theme.FileTransferTheme
@@ -40,16 +34,21 @@ import me.gaojianli.filetransfer.wifi.WiFiDirectBroadcastReceiver
 import java.util.*
 
 import android.content.Intent
-import android.database.Cursor
 import android.net.Uri
 import android.net.wifi.p2p.*
+import android.os.Environment
 import androidx.activity.result.contract.ActivityResultContract
-import well_of_file.Well_of_file
-import android.provider.MediaStore
 import me.gaojianli.filetransfer.utils.UriUtils
 import androidx.core.content.ContextCompat
+import me.gaojianli.filetransfer.utils.FileUtils
+import me.gaojianli.filetransfer.utils.OpenFileUtil
+import me.gaojianli.filetransfer.viewModel.PickDeviceViewModel
+import well_of_file.Well_of_file
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
+import java.nio.channels.FileChannel
 
 
 val TYPE_SEND = "send"
@@ -62,11 +61,14 @@ class PickDeviceActivity : ComponentActivity() {
     private var wifiP2pInfo: WifiP2pInfo? = null
     private lateinit var broadcastReceiver: BroadcastReceiver
     private var isSending: Boolean = false
+    private var isReceiving: Boolean = false
     private var fileUri:Uri? = null
-    private val activityLauncher = registerForActivityResult(ResultContract()) {
-        it?.let {
+    private val filepickerActivityLauncher = registerForActivityResult(PickFileResultContract()) {
+        if(it == null){
+            finish()
+        }
+        else{
             fileUri = it
-            Toast.makeText(this, it.path, Toast.LENGTH_LONG).show()
             createGroup()
         }
     }
@@ -77,6 +79,7 @@ class PickDeviceActivity : ComponentActivity() {
     private val viewModel = PickDeviceViewModel()
     private val TAG = "PickDeviceActivity"
     private var Type: String? = null
+    private var savedFile:String ? = null
     private lateinit var dialog: LoadingDialog
     private val directActionListener: DirectActionListener = object : DirectActionListener {
         override fun wifiP2pEnabled(enabled: Boolean) {
@@ -101,11 +104,13 @@ class PickDeviceActivity : ComponentActivity() {
                         viewModel.serverFile(path) {
                             dialog.dismiss()
                             isSending = false
+                            Toast.makeText(this@PickDeviceActivity, "File Sended!", Toast.LENGTH_LONG)
+                                .show()
+                            finish()
                         }
                     }
                 }
             } else {
-
                 stringBuilder.append("连接的设备名：")
                 stringBuilder.append(mWifiP2pDevice.deviceName)
                 stringBuilder.append("\n")
@@ -121,10 +126,43 @@ class PickDeviceActivity : ComponentActivity() {
                 Toast.makeText(this@PickDeviceActivity, stringBuilder.toString(), Toast.LENGTH_LONG)
                     .show()
                 if (wifiP2pInfo.groupFormed && !wifiP2pInfo.isGroupOwner) {
-                    this@PickDeviceActivity.wifiP2pInfo = wifiP2pInfo
-                    dialog.show(hintText = "Start Receving", cancelable = true, canceledOnTouchOutside = false)
-                    Well_of_file.receive(wifiP2pInfo.groupOwnerAddress.hostAddress,11451,"/data/local/tmp")
-                    dialog.dismiss()
+                    if(!isReceiving){
+                        val PERMISSIONS_STORAGE = arrayOf(
+                            Manifest.permission.READ_EXTERNAL_STORAGE,
+                            Manifest.permission.WRITE_EXTERNAL_STORAGE
+                        )
+
+                        if (PackageManager.PERMISSION_GRANTED !=
+                            ContextCompat.checkSelfPermission(this@PickDeviceActivity,
+                                Manifest.permission.WRITE_CONTACTS
+                            )
+                        ) {
+                            ActivityCompat.requestPermissions(
+                                this@PickDeviceActivity,
+                                PERMISSIONS_STORAGE,
+                                1
+                            )
+                        }
+                        this@PickDeviceActivity.wifiP2pInfo = wifiP2pInfo
+                        dialog.setText(hintText = "Start Receving")
+                        isReceiving = true
+                        val appDir = this@PickDeviceActivity.filesDir.absolutePath
+                        Well_of_file.setPath(appDir,"lt_cache")
+                        viewModel.recevieFile(wifiP2pInfo.groupOwnerAddress.hostAddress,appDir){ fileName ->
+                            Toast.makeText(this@PickDeviceActivity,
+                                "File write to $appDir/$fileName", Toast.LENGTH_LONG)
+                                .show()
+                            isReceiving = false
+                            FileUtils.deleteDir("$appDir/lt_cache")
+                            savedFile = "$appDir/$fileName"
+                            dialog.dismiss()
+                            val downloadFile = FileUtils.copyFileToDownloads(this@PickDeviceActivity,File(savedFile!!))
+                            Toast.makeText(this@PickDeviceActivity,
+                                "File write to ${UriUtils.getPathFromUri(this@PickDeviceActivity,downloadFile)}", Toast.LENGTH_LONG)
+                                .show()
+                            finish()
+                        }
+                    }
                 }
             }
 
@@ -250,7 +288,7 @@ class PickDeviceActivity : ComponentActivity() {
                 )
             }
             dialog.show(hintText = "Waiting for connection", cancelable = true, canceledOnTouchOutside = false)
-            activityLauncher.launch(false)
+            filepickerActivityLauncher.launch(false)
         }
     }
 
@@ -263,13 +301,11 @@ class PickDeviceActivity : ComponentActivity() {
                     this,
                     Manifest.permission.ACCESS_FINE_LOCATION
                 ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                ActivityCompat.requestPermissions(
-                    this,
-                    arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
-                    1
-                )
-            }
+            ) ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
+                1
+            )
             manager.connect(channel, config, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() {
                     Log.d(TAG, "connect onSuccess")
@@ -295,7 +331,7 @@ class PickDeviceActivity : ComponentActivity() {
         applicationContext.unregisterReceiver(broadcastReceiver)
     }
 
-    class ResultContract : ActivityResultContract<Boolean, Uri?>() {
+    class PickFileResultContract : ActivityResultContract<Boolean, Uri?>() {
         override fun createIntent(context: Context, input: Boolean?): Intent {
             return Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
@@ -333,6 +369,7 @@ class PickDeviceActivity : ComponentActivity() {
 
             override fun onFailure(reason: Int) {
                 Toast.makeText(this@PickDeviceActivity, "Create group failed", Toast.LENGTH_LONG).show()
+                removeGroup()
                 dialog.dismiss()
                 finish()
             }
@@ -342,34 +379,15 @@ class PickDeviceActivity : ComponentActivity() {
     private fun removeGroup() {
         manager.removeGroup(channel, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
-                Toast.makeText(this@PickDeviceActivity, "onSuccess", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@PickDeviceActivity, "remove group success", Toast.LENGTH_LONG).show()
             }
 
             override fun onFailure(reason: Int) {
-                Toast.makeText(this@PickDeviceActivity, "onFailure", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@PickDeviceActivity, "remove group failed", Toast.LENGTH_LONG).show()
             }
         })
     }
-}
 
-class PickDeviceViewModel : ViewModel() {
-    var peerList: List<WifiP2pDevice> by mutableStateOf(listOf())
-    fun discovery(discoveryFun: () -> Unit) {
-        viewModelScope.launch(Dispatchers.IO) {
-            discoveryFun()
-        }
-    }
-
-    fun setPeerList(list: Collection<WifiP2pDevice>) {
-        peerList = list.toList()
-    }
-
-    fun serverFile(path:String,callback:()->Unit){
-        viewModelScope.launch(Dispatchers.IO) {
-            Well_of_file.send(path,11451)
-            callback()
-        }
-    }
 }
 
 @Preview
